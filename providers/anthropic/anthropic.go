@@ -1,4 +1,4 @@
-// Package anthropic provides an Anthropic Claude API client for gollm-x.
+// Package anthropic provides Anthropic Claude API implementation for gollm-x
 package anthropic
 
 import (
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -17,195 +16,88 @@ import (
 )
 
 const (
-	ProviderID     = "anthropic"
-	ProviderName   = "Anthropic"
-	DefaultBaseURL = "https://api.anthropic.com"
-	DefaultVersion = "2023-06-01"
-	ClientVersion  = "1.0.0"
+	ProviderID      = "anthropic"
+	ProviderName    = "Anthropic"
+	DefaultBaseURL  = "https://api.anthropic.com/v1"
+	DefaultModel    = "claude-3-5-sonnet-20241022"
+	APIVersion      = "2023-06-01"
 )
+
+func init() {
+	gollmx.Register(ProviderID, New)
+}
 
 // Client implements the gollmx.LLM interface for Anthropic
 type Client struct {
-	config     *gollmx.Config
-	httpClient *http.Client
-	baseURL    string
-	apiVersion string
-	options    map[string]interface{}
+	config  *gollmx.Config
+	baseURL string
+	options map[string]interface{}
 }
 
-func init() {
-	gollmx.Register(ProviderID, NewClient)
-}
-
-// NewClient creates a new Anthropic client
-func NewClient(opts ...gollmx.Option) (gollmx.LLM, error) {
+// New creates a new Anthropic client
+func New(opts ...gollmx.Option) (gollmx.LLM, error) {
 	config := gollmx.DefaultConfig()
 	config.Apply(opts...)
-
-	// Try to get API key from environment if not provided
-	if config.APIKey == "" {
-		config.APIKey = os.Getenv("ANTHROPIC_API_KEY")
-	}
-
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
 
 	baseURL := config.BaseURL
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
 
-	return &Client{
-		config:     config,
-		httpClient: config.GetHTTPClient(),
-		baseURL:    baseURL,
-		apiVersion: DefaultVersion,
-		options:    make(map[string]interface{}),
-	}, nil
+	client := &Client{
+		config:  config,
+		baseURL: baseURL,
+		options: make(map[string]interface{}),
+	}
+
+	return client, nil
 }
 
-// Provider information methods
-func (c *Client) ID() string      { return ProviderID }
-func (c *Client) Name() string    { return ProviderName }
-func (c *Client) Version() string { return ClientVersion }
-func (c *Client) BaseURL() string { return c.baseURL }
+// ID returns the provider identifier
+func (c *Client) ID() string {
+	return ProviderID
+}
 
-// Models returns all available Anthropic models
+// Name returns the provider name
+func (c *Client) Name() string {
+	return ProviderName
+}
+
+// Version returns the client version
+func (c *Client) Version() string {
+	return "1.0.0"
+}
+
+// BaseURL returns the API base URL
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
+// Models returns the list of available models
 func (c *Client) Models() []gollmx.Model {
 	return AnthropicModels
 }
 
 // GetModel returns information about a specific model
 func (c *Client) GetModel(id string) (*gollmx.Model, error) {
-	for _, model := range AnthropicModels {
-		if model.ID == id {
-			return &model, nil
+	for _, m := range AnthropicModels {
+		if m.ID == id {
+			return &m, nil
 		}
 	}
 	return nil, gollmx.NewAPIError(gollmx.ErrorTypeModelNotFound, ProviderID, fmt.Sprintf("model not found: %s", id))
 }
 
-// Chat sends a chat request to Anthropic's Messages API
-func (c *Client) Chat(ctx context.Context, req *gollmx.ChatRequest) (*gollmx.ChatResponse, error) {
-	anthropicReq, systemPrompt := c.convertChatRequest(req)
-	if systemPrompt != "" {
-		anthropicReq.System = systemPrompt
-	}
-
-	body, err := json.Marshal(anthropicReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	c.setHeaders(httpReq)
-
-	resp, err := c.doRequestWithRetry(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	var anthropicResp anthropicMessagesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return c.convertChatResponse(&anthropicResp), nil
-}
-
-// ChatStream sends a streaming chat request
-func (c *Client) ChatStream(ctx context.Context, req *gollmx.ChatRequest) (*gollmx.StreamReader, error) {
-	anthropicReq, systemPrompt := c.convertChatRequest(req)
-	if systemPrompt != "" {
-		anthropicReq.System = systemPrompt
-	}
-	anthropicReq.Stream = true
-
-	body, err := json.Marshal(anthropicReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	c.setHeaders(httpReq)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		return nil, c.handleErrorResponse(resp)
-	}
-
-	ch := make(chan gollmx.StreamChunk, 100)
-	go c.processStream(resp, ch)
-
-	return gollmx.NewStreamReader(ch), nil
-}
-
-// Complete is not natively supported by Anthropic's Messages API
-func (c *Client) Complete(ctx context.Context, req *gollmx.CompletionRequest) (*gollmx.CompletionResponse, error) {
-	// Convert completion request to chat request
-	chatReq := &gollmx.ChatRequest{
-		Model:       req.Model,
-		Messages:    []gollmx.Message{{Role: gollmx.RoleUser, Content: req.Prompt}},
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stop:        req.Stop,
-	}
-
-	chatResp, err := c.Chat(ctx, chatReq)
-	if err != nil {
-		return nil, err
-	}
-
-	return &gollmx.CompletionResponse{
-		ID:       chatResp.ID,
-		Provider: ProviderID,
-		Model:    chatResp.Model,
-		Created:  chatResp.Created,
-		Choices: []gollmx.CompletionChoice{{
-			Index:        0,
-			Text:         chatResp.GetContent(),
-			FinishReason: chatResp.Choices[0].FinishReason,
-		}},
-		Usage: chatResp.Usage,
-	}, nil
-}
-
-// Embed is not supported by Anthropic
-func (c *Client) Embed(ctx context.Context, req *gollmx.EmbedRequest) (*gollmx.EmbedResponse, error) {
-	return nil, gollmx.NewAPIError(gollmx.ErrorTypeInvalidRequest, ProviderID, "Anthropic does not support embeddings")
-}
-
-// HasFeature checks if the provider supports a feature
+// HasFeature checks if a feature is supported
 func (c *Client) HasFeature(feature gollmx.Feature) bool {
 	switch feature {
 	case gollmx.FeatureChat, gollmx.FeatureStreaming, gollmx.FeatureVision,
 		gollmx.FeatureTools, gollmx.FeatureJSON, gollmx.FeatureSystemPrompt:
 		return true
-	case gollmx.FeatureEmbedding, gollmx.FeatureCompletion:
-		return false
-	default:
+	case gollmx.FeatureCompletion, gollmx.FeatureEmbedding:
 		return false
 	}
+	return false
 }
 
 // Features returns all supported features
@@ -233,83 +125,290 @@ func (c *Client) GetOption(key string) (interface{}, bool) {
 }
 
 // =============================================================================
-// Private methods
+// Chat
+// =============================================================================
+
+// Chat performs a chat completion request
+func (c *Client) Chat(ctx context.Context, req *gollmx.ChatRequest) (*gollmx.ChatResponse, error) {
+	if req.Model == "" {
+		req.Model = c.config.DefaultModel
+		if req.Model == "" {
+			req.Model = DefaultModel
+		}
+	}
+
+	anthropicReq := c.convertRequest(req)
+
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/messages", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.config.GetHTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, c.handleError(err, 0, nil)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleError(nil, resp.StatusCode, respBody)
+	}
+
+	var anthropicResp anthropicResponse
+	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return c.convertResponse(&anthropicResp), nil
+}
+
+// ChatStream performs a streaming chat completion request
+func (c *Client) ChatStream(ctx context.Context, req *gollmx.ChatRequest) (*gollmx.StreamReader, error) {
+	if req.Model == "" {
+		req.Model = c.config.DefaultModel
+		if req.Model == "" {
+			req.Model = DefaultModel
+		}
+	}
+
+	anthropicReq := c.convertRequest(req)
+	anthropicReq.Stream = true
+
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/messages", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.config.GetHTTPClient().Do(httpReq)
+	if err != nil {
+		return nil, c.handleError(err, 0, nil)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, c.handleError(nil, resp.StatusCode, respBody)
+	}
+
+	ch := make(chan gollmx.StreamChunk)
+	go c.readStream(resp.Body, ch, req.Model)
+
+	return gollmx.NewStreamReader(ch), nil
+}
+
+func (c *Client) readStream(body io.ReadCloser, ch chan gollmx.StreamChunk, model string) {
+	defer close(ch)
+	defer body.Close()
+
+	var messageID string
+	var currentToolCall *gollmx.ToolCall
+
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "" {
+			continue
+		}
+
+		var event anthropicStreamEvent
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			ch <- gollmx.StreamChunk{Error: err}
+			return
+		}
+
+		switch event.Type {
+		case "message_start":
+			if event.Message != nil {
+				messageID = event.Message.ID
+			}
+		case "content_block_start":
+			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+				currentToolCall = &gollmx.ToolCall{
+					ID:   event.ContentBlock.ID,
+					Type: "function",
+					Function: gollmx.FunctionCall{
+						Name: event.ContentBlock.Name,
+					},
+				}
+			}
+		case "content_block_delta":
+			if event.Delta != nil {
+				chunk := gollmx.StreamChunk{
+					ID:       messageID,
+					Provider: ProviderID,
+					Model:    model,
+				}
+
+				if event.Delta.Text != "" {
+					chunk.Content = event.Delta.Text
+				}
+
+				if event.Delta.PartialJSON != "" && currentToolCall != nil {
+					currentToolCall.Function.Arguments += event.Delta.PartialJSON
+				}
+
+				ch <- chunk
+			}
+		case "content_block_stop":
+			if currentToolCall != nil {
+				ch <- gollmx.StreamChunk{
+					ID:        messageID,
+					Provider:  ProviderID,
+					Model:     model,
+					ToolCalls: []gollmx.ToolCall{*currentToolCall},
+				}
+				currentToolCall = nil
+			}
+		case "message_delta":
+			if event.Delta != nil {
+				chunk := gollmx.StreamChunk{
+					ID:           messageID,
+					Provider:     ProviderID,
+					Model:        model,
+					FinishReason: event.Delta.StopReason,
+				}
+				if event.Usage != nil {
+					chunk.Usage = gollmx.Usage{
+						PromptTokens:     event.Usage.InputTokens,
+						CompletionTokens: event.Usage.OutputTokens,
+						TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
+					}
+				}
+				ch <- chunk
+			}
+		case "message_stop":
+			// Stream complete
+		case "error":
+			ch <- gollmx.StreamChunk{Error: fmt.Errorf("stream error")}
+			return
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		ch <- gollmx.StreamChunk{Error: err}
+	}
+}
+
+// =============================================================================
+// Completion (not supported by Anthropic)
+// =============================================================================
+
+// Complete performs a text completion request
+func (c *Client) Complete(ctx context.Context, req *gollmx.CompletionRequest) (*gollmx.CompletionResponse, error) {
+	// Convert to chat completion
+	chatReq := &gollmx.ChatRequest{
+		Model: req.Model,
+		Messages: []gollmx.Message{
+			{Role: gollmx.RoleUser, Content: req.Prompt},
+		},
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		Stop:        req.Stop,
+	}
+
+	chatResp, err := c.Chat(ctx, chatReq)
+	if err != nil {
+		return nil, err
+	}
+
+	return &gollmx.CompletionResponse{
+		ID:       chatResp.ID,
+		Provider: ProviderID,
+		Model:    chatResp.Model,
+		Created:  chatResp.Created,
+		Choices: []gollmx.CompletionChoice{
+			{
+				Index:        0,
+				Text:         chatResp.GetContent(),
+				FinishReason: chatResp.Choices[0].FinishReason,
+			},
+		},
+		Usage: chatResp.Usage,
+	}, nil
+}
+
+// =============================================================================
+// Embedding (not supported by Anthropic)
+// =============================================================================
+
+// Embed generates embeddings (not supported)
+func (c *Client) Embed(ctx context.Context, req *gollmx.EmbedRequest) (*gollmx.EmbedResponse, error) {
+	return nil, gollmx.NewAPIError(gollmx.ErrorTypeInvalidRequest, ProviderID, "embedding not supported by Anthropic")
+}
+
+// =============================================================================
+// Helpers
 // =============================================================================
 
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.config.APIKey)
-	req.Header.Set("anthropic-version", c.apiVersion)
+	req.Header.Set("anthropic-version", APIVersion)
 
 	for k, v := range c.config.Headers {
 		req.Header.Set(k, v)
 	}
 }
 
-func (c *Client) doRequestWithRetry(req *http.Request) (*http.Response, error) {
-	var lastErr error
-
-	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(c.config.RetryDelay * time.Duration(attempt))
-
-			// Clone request for retry
-			newReq := req.Clone(req.Context())
-			if req.Body != nil {
-				body, err := io.ReadAll(req.Body)
-				if err != nil {
-					return nil, err
-				}
-				newReq.Body = io.NopCloser(bytes.NewReader(body))
-				req.Body = io.NopCloser(bytes.NewReader(body))
-			}
-			req = newReq
+func (c *Client) handleError(err error, statusCode int, body []byte) error {
+	if err != nil {
+		return &gollmx.APIError{
+			Type:     gollmx.ErrorTypeNetwork,
+			Provider: ProviderID,
+			Message:  err.Error(),
 		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		// Don't retry on success or client errors
-		if resp.StatusCode < 500 {
-			return resp, nil
-		}
-
-		// Server error, might be retryable
-		resp.Body.Close()
-		lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
-	}
-
-	return nil, lastErr
-}
-
-func (c *Client) handleErrorResponse(resp *http.Response) error {
-	body, _ := io.ReadAll(resp.Body)
-
-	var errResp anthropicErrorResponse
-	if err := json.Unmarshal(body, &errResp); err != nil {
-		return gollmx.NewAPIError(gollmx.ErrorTypeUnknown, ProviderID, string(body))
 	}
 
 	apiErr := &gollmx.APIError{
 		Provider:   ProviderID,
-		StatusCode: resp.StatusCode,
-		Message:    errResp.Error.Message,
-		Code:       errResp.Error.Type,
-		Raw:        errResp,
+		StatusCode: statusCode,
 	}
 
-	switch errResp.Error.Type {
-	case "authentication_error":
+	var errResp anthropicErrorResponse
+	if json.Unmarshal(body, &errResp) == nil && errResp.Error != nil {
+		apiErr.Message = errResp.Error.Message
+		apiErr.Code = errResp.Error.Type
+	} else {
+		apiErr.Message = string(body)
+	}
+
+	switch statusCode {
+	case 401:
 		apiErr.Type = gollmx.ErrorTypeAuth
-	case "rate_limit_error":
+	case 429:
 		apiErr.Type = gollmx.ErrorTypeRateLimit
 		apiErr.Retryable = true
-	case "invalid_request_error":
+		apiErr.RetryAfter = 60 * time.Second
+	case 400:
 		apiErr.Type = gollmx.ErrorTypeInvalidRequest
-	case "overloaded_error":
+	case 404:
+		apiErr.Type = gollmx.ErrorTypeModelNotFound
+	case 500, 502, 503, 529:
 		apiErr.Type = gollmx.ErrorTypeServer
 		apiErr.Retryable = true
 	default:
@@ -319,64 +418,40 @@ func (c *Client) handleErrorResponse(resp *http.Response) error {
 	return apiErr
 }
 
-func (c *Client) convertChatRequest(req *gollmx.ChatRequest) (*anthropicMessagesRequest, string) {
-	var messages []anthropicMessage
+func (c *Client) convertRequest(req *gollmx.ChatRequest) *anthropicRequest {
 	var systemPrompt string
+	messages := make([]anthropicMessage, 0, len(req.Messages))
 
-	for _, msg := range req.Messages {
-		switch msg.Role {
-		case gollmx.RoleSystem:
-			// Extract system message
-			if content, ok := msg.Content.(string); ok {
-				systemPrompt = content
-			}
-		case gollmx.RoleUser, gollmx.RoleAssistant:
-			messages = append(messages, c.convertMessage(msg))
-		case gollmx.RoleTool:
-			// Tool results are added to the previous user message
-			messages = append(messages, c.convertToolResultMessage(msg))
+	for _, m := range req.Messages {
+		if m.Role == gollmx.RoleSystem {
+			systemPrompt = m.Content.(string)
+			continue
 		}
-	}
 
-	anthropicReq := &anthropicMessagesRequest{
-		Model:    req.Model,
-		Messages: messages,
-	}
+		msg := anthropicMessage{
+			Role: string(m.Role),
+		}
 
-	if req.MaxTokens > 0 {
-		anthropicReq.MaxTokens = req.MaxTokens
-	} else {
-		anthropicReq.MaxTokens = 4096 // Default
-	}
-
-	if req.Temperature != nil {
-		anthropicReq.Temperature = req.Temperature
-	}
-	if req.TopP != nil {
-		anthropicReq.TopP = req.TopP
-	}
-	if len(req.Stop) > 0 {
-		anthropicReq.StopSeqs = req.Stop
-	}
-
-	// Convert tools
-	if len(req.Tools) > 0 {
-		anthropicReq.Tools = c.convertTools(req.Tools)
-	}
-
-	return anthropicReq, systemPrompt
-}
-
-func (c *Client) convertMessage(msg gollmx.Message) anthropicMessage {
-	role := string(msg.Role)
-
-	// Handle multimodal content
-	switch content := msg.Content.(type) {
-	case string:
-		if len(msg.ToolCalls) > 0 {
+		// Handle tool results
+		if m.Role == gollmx.RoleTool {
+			msg.Role = "user"
+			msg.Content = []anthropicContentBlock{
+				{
+					Type:      "tool_result",
+					ToolUseID: m.ToolCallID,
+					Content:   m.Content.(string),
+				},
+			}
+		} else if len(m.ToolCalls) > 0 {
 			// Assistant message with tool calls
-			blocks := []anthropicContentBlock{{Type: "text", Text: content}}
-			for _, tc := range msg.ToolCalls {
+			blocks := make([]anthropicContentBlock, 0)
+			if content, ok := m.Content.(string); ok && content != "" {
+				blocks = append(blocks, anthropicContentBlock{
+					Type: "text",
+					Text: content,
+				})
+			}
+			for _, tc := range m.ToolCalls {
 				blocks = append(blocks, anthropicContentBlock{
 					Type:  "tool_use",
 					ID:    tc.ID,
@@ -384,66 +459,44 @@ func (c *Client) convertMessage(msg gollmx.Message) anthropicMessage {
 					Input: json.RawMessage(tc.Function.Arguments),
 				})
 			}
-			return anthropicMessage{Role: role, Content: blocks}
+			msg.Content = blocks
+		} else {
+			msg.Content = m.Content
 		}
-		return anthropicMessage{Role: role, Content: content}
 
-	case []gollmx.ContentPart:
-		var blocks []anthropicContentBlock
-		for _, part := range content {
-			switch part.Type {
-			case "text":
-				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: part.Text})
-			case "image_url":
-				if part.ImageURL != nil {
-					blocks = append(blocks, anthropicContentBlock{
-						Type: "image",
-						Source: &anthropicImageSource{
-							Type: "url",
-							URL:  part.ImageURL.URL,
-						},
-					})
-				}
+		messages = append(messages, msg)
+	}
+
+	maxTokens := req.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 4096
+	}
+
+	anthropicReq := &anthropicRequest{
+		Model:       req.Model,
+		Messages:    messages,
+		MaxTokens:   maxTokens,
+		System:      systemPrompt,
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		StopSeqs:    req.Stop,
+	}
+
+	if len(req.Tools) > 0 {
+		anthropicReq.Tools = make([]anthropicTool, len(req.Tools))
+		for i, t := range req.Tools {
+			anthropicReq.Tools[i] = anthropicTool{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				InputSchema: t.Function.Parameters,
 			}
 		}
-		return anthropicMessage{Role: role, Content: blocks}
-
-	default:
-		return anthropicMessage{Role: role, Content: ""}
 	}
+
+	return anthropicReq
 }
 
-func (c *Client) convertToolResultMessage(msg gollmx.Message) anthropicMessage {
-	content := ""
-	if c, ok := msg.Content.(string); ok {
-		content = c
-	}
-
-	return anthropicMessage{
-		Role: "user",
-		Content: []anthropicContentBlock{{
-			Type:      "tool_result",
-			ToolUseID: msg.ToolCallID,
-			Content:   content,
-		}},
-	}
-}
-
-func (c *Client) convertTools(tools []gollmx.Tool) []anthropicTool {
-	var result []anthropicTool
-	for _, tool := range tools {
-		if tool.Type == "function" {
-			result = append(result, anthropicTool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-				InputSchema: tool.Function.Parameters,
-			})
-		}
-	}
-	return result
-}
-
-func (c *Client) convertChatResponse(resp *anthropicMessagesResponse) *gollmx.ChatResponse {
+func (c *Client) convertResponse(resp *anthropicResponse) *gollmx.ChatResponse {
 	var content string
 	var toolCalls []gollmx.ToolCall
 
@@ -452,134 +505,48 @@ func (c *Client) convertChatResponse(resp *anthropicMessagesResponse) *gollmx.Ch
 		case "text":
 			content += block.Text
 		case "tool_use":
-			toolCalls = append(toolCalls, gollmx.ToolCall{
+			tc := gollmx.ToolCall{
 				ID:   block.ID,
 				Type: "function",
 				Function: gollmx.FunctionCall{
 					Name:      block.Name,
 					Arguments: string(block.Input),
 				},
-			})
+			}
+			toolCalls = append(toolCalls, tc)
 		}
 	}
 
-	finishReason := c.convertStopReason(resp.StopReason)
+	message := gollmx.Message{
+		Role:      gollmx.RoleAssistant,
+		Content:   content,
+		ToolCalls: toolCalls,
+	}
+
+	finishReason := resp.StopReason
+	if finishReason == "end_turn" {
+		finishReason = "stop"
+	} else if finishReason == "tool_use" {
+		finishReason = "tool_calls"
+	}
 
 	return &gollmx.ChatResponse{
 		ID:       resp.ID,
 		Provider: ProviderID,
 		Model:    resp.Model,
 		Created:  time.Now().Unix(),
-		Choices: []gollmx.Choice{{
-			Index: 0,
-			Message: gollmx.Message{
-				Role:      gollmx.RoleAssistant,
-				Content:   content,
-				ToolCalls: toolCalls,
+		Choices: []gollmx.Choice{
+			{
+				Index:        0,
+				Message:      message,
+				FinishReason: finishReason,
 			},
-			FinishReason: finishReason,
-		}},
+		},
 		Usage: gollmx.Usage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 		},
 		Raw: resp,
-	}
-}
-
-func (c *Client) convertStopReason(reason string) string {
-	switch reason {
-	case "end_turn":
-		return "stop"
-	case "max_tokens":
-		return "length"
-	case "stop_sequence":
-		return "stop"
-	case "tool_use":
-		return "tool_calls"
-	default:
-		return reason
-	}
-}
-
-func (c *Client) processStream(resp *http.Response, ch chan<- gollmx.StreamChunk) {
-	defer close(ch)
-	defer resp.Body.Close()
-
-	reader := bufio.NewReader(resp.Body)
-	var messageID, model string
-	var inputTokens int
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err != io.EOF {
-				ch <- gollmx.StreamChunk{Error: err}
-			}
-			return
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			return
-		}
-
-		var event anthropicStreamEvent
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "message_start":
-			if event.Message != nil {
-				messageID = event.Message.ID
-				model = event.Message.Model
-				inputTokens = event.Message.Usage.InputTokens
-			}
-
-		case "content_block_delta":
-			var delta anthropicStreamDelta
-			if err := json.Unmarshal(event.Delta, &delta); err != nil {
-				continue
-			}
-
-			if delta.Text != "" {
-				ch <- gollmx.StreamChunk{
-					ID:       messageID,
-					Provider: ProviderID,
-					Model:    model,
-					Content:  delta.Text,
-				}
-			}
-
-		case "message_delta":
-			var delta anthropicStreamDelta
-			if err := json.Unmarshal(event.Delta, &delta); err != nil {
-				continue
-			}
-
-			chunk := gollmx.StreamChunk{
-				ID:           messageID,
-				Provider:     ProviderID,
-				Model:        model,
-				FinishReason: c.convertStopReason(delta.StopReason),
-			}
-
-			if event.Usage != nil {
-				chunk.Usage = gollmx.Usage{
-					PromptTokens:     inputTokens,
-					CompletionTokens: event.Usage.OutputTokens,
-					TotalTokens:      inputTokens + event.Usage.OutputTokens,
-				}
-			}
-
-			ch <- chunk
-		}
 	}
 }

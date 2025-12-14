@@ -2,14 +2,12 @@ package anthropic
 
 import gollmx "github.com/onlyhyde/gollm-x"
 
-// AnthropicModels contains all known Anthropic models
+// AnthropicModels defines the available Anthropic models
 var AnthropicModels = []gollmx.Model{
-	// Claude 3.5 series
 	{
 		ID:            "claude-3-5-sonnet-20241022",
 		Name:          "Claude 3.5 Sonnet",
 		Provider:      ProviderID,
-		Description:   "Most intelligent model, best for complex tasks",
 		ContextWindow: 200000,
 		MaxOutput:     8192,
 		InputPrice:    3.00,
@@ -22,13 +20,11 @@ var AnthropicModels = []gollmx.Model{
 			gollmx.FeatureJSON,
 			gollmx.FeatureSystemPrompt,
 		},
-		ReleaseDate: "2024-10-22",
 	},
 	{
 		ID:            "claude-3-5-haiku-20241022",
 		Name:          "Claude 3.5 Haiku",
 		Provider:      ProviderID,
-		Description:   "Fastest model, great for quick tasks",
 		ContextWindow: 200000,
 		MaxOutput:     8192,
 		InputPrice:    1.00,
@@ -41,14 +37,11 @@ var AnthropicModels = []gollmx.Model{
 			gollmx.FeatureJSON,
 			gollmx.FeatureSystemPrompt,
 		},
-		ReleaseDate: "2024-10-22",
 	},
-	// Claude 3 series
 	{
 		ID:            "claude-3-opus-20240229",
 		Name:          "Claude 3 Opus",
 		Provider:      ProviderID,
-		Description:   "Powerful model for complex analysis and tasks",
 		ContextWindow: 200000,
 		MaxOutput:     4096,
 		InputPrice:    15.00,
@@ -61,13 +54,11 @@ var AnthropicModels = []gollmx.Model{
 			gollmx.FeatureJSON,
 			gollmx.FeatureSystemPrompt,
 		},
-		ReleaseDate: "2024-02-29",
 	},
 	{
 		ID:            "claude-3-sonnet-20240229",
 		Name:          "Claude 3 Sonnet",
 		Provider:      ProviderID,
-		Description:   "Balanced model for most tasks",
 		ContextWindow: 200000,
 		MaxOutput:     4096,
 		InputPrice:    3.00,
@@ -80,13 +71,11 @@ var AnthropicModels = []gollmx.Model{
 			gollmx.FeatureJSON,
 			gollmx.FeatureSystemPrompt,
 		},
-		ReleaseDate: "2024-02-29",
 	},
 	{
 		ID:            "claude-3-haiku-20240307",
 		Name:          "Claude 3 Haiku",
 		Provider:      ProviderID,
-		Description:   "Fast and cost-effective for simple tasks",
 		ContextWindow: 200000,
 		MaxOutput:     4096,
 		InputPrice:    0.25,
@@ -99,41 +88,5 @@ var AnthropicModels = []gollmx.Model{
 			gollmx.FeatureJSON,
 			gollmx.FeatureSystemPrompt,
 		},
-		ReleaseDate: "2024-03-07",
-	},
-	// Legacy models
-	{
-		ID:            "claude-2.1",
-		Name:          "Claude 2.1",
-		Provider:      ProviderID,
-		Description:   "Previous generation model with 200K context",
-		ContextWindow: 200000,
-		MaxOutput:     4096,
-		InputPrice:    8.00,
-		OutputPrice:   24.00,
-		Features: []gollmx.Feature{
-			gollmx.FeatureChat,
-			gollmx.FeatureStreaming,
-			gollmx.FeatureSystemPrompt,
-		},
-		Deprecated:  true,
-		ReleaseDate: "2023-11-21",
-	},
-	{
-		ID:            "claude-2.0",
-		Name:          "Claude 2.0",
-		Provider:      ProviderID,
-		Description:   "Previous generation model",
-		ContextWindow: 100000,
-		MaxOutput:     4096,
-		InputPrice:    8.00,
-		OutputPrice:   24.00,
-		Features: []gollmx.Feature{
-			gollmx.FeatureChat,
-			gollmx.FeatureStreaming,
-			gollmx.FeatureSystemPrompt,
-		},
-		Deprecated:  true,
-		ReleaseDate: "2023-07-11",
 	},
 }
