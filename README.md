@@ -62,6 +62,7 @@ func main() {
 | OpenAI | `openai` | Yes | Yes | Yes | Yes | Yes |
 | Anthropic | `anthropic` | Yes | Yes | Yes | Yes | No |
 | Google Gemini | `google` | Yes | Yes | Yes | Yes | Yes |
+| Ollama | `ollama` | Yes | Yes | Yes | No | Yes |
 
 ## Configuration
 
