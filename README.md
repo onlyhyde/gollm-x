@@ -64,6 +64,9 @@ func main() {
 | OpenAI | `openai` | Yes | Yes | Yes | Yes | Yes |
 | Anthropic | `anthropic` | Yes | Yes | Yes | Yes | No |
 | Google Gemini | `google` | Yes | Yes | Yes | Yes | Yes |
+| Groq | `groq` | Yes | Yes | No | Yes | No |
+| Mistral | `mistral` | Yes | Yes | No | Yes | Yes |
+| Cohere | `cohere` | Yes | Yes | No | Yes | Yes |
 | Ollama | `ollama` | Yes | Yes | Yes | No | Yes |
 
 ## Configuration

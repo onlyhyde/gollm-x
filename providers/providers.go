@@ -7,7 +7,10 @@ package providers
 import (
 	// Import all providers to trigger their init() functions
 	_ "github.com/onlyhyde/gollm-x/providers/anthropic"
+	_ "github.com/onlyhyde/gollm-x/providers/cohere"
 	_ "github.com/onlyhyde/gollm-x/providers/google"
+	_ "github.com/onlyhyde/gollm-x/providers/groq"
+	_ "github.com/onlyhyde/gollm-x/providers/mistral"
 	_ "github.com/onlyhyde/gollm-x/providers/ollama"
 	_ "github.com/onlyhyde/gollm-x/providers/openai"
 )
