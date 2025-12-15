@@ -9,8 +9,10 @@ A unified Go library for interacting with multiple LLM providers. Inspired by [c
 - **Streaming Support**: Built-in streaming with iterator pattern
 - **Tool/Function Calling**: Consistent tool calling across providers
 - **Multimodal**: Vision support for models that support it
+- **Embeddings**: Vector embeddings for semantic search
 - **Feature Detection**: Query provider capabilities at runtime
 - **Retry Logic**: Built-in retry with exponential backoff
+- **Rate Limiting**: Token bucket rate limiter for API throttling
 - **Type Safety**: Strongly typed requests and responses
 
 ## Installation
@@ -142,6 +144,60 @@ if client.HasFeature(gollmx.FeatureVision) {
 
 // List all supported features
 features := client.Features()
+```
+
+## Embeddings
+
+```go
+resp, err := client.Embed(ctx, &gollmx.EmbedRequest{
+    Model: "text-embedding-3-small",
+    Input: []string{
+        "Hello, world!",
+        "How are you today?",
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+for i, emb := range resp.Embeddings {
+    fmt.Printf("Embedding %d: %d dimensions\n", i, len(emb.Vector))
+}
+```
+
+## Retry Logic
+
+Wrap any client with automatic retry and exponential backoff:
+
+```go
+client = gollmx.WithRetry(client,
+    gollmx.WithRetryMaxRetries(3),
+    gollmx.WithRetryInitialDelay(1*time.Second),
+    gollmx.WithRetryMaxDelay(30*time.Second),
+    gollmx.WithRetryMultiplier(2.0),
+)
+
+// Retries automatically on rate limits, server errors, and network issues
+resp, err := client.Chat(ctx, req)
+```
+
+## Rate Limiting
+
+Control API request rates with token bucket rate limiter:
+
+```go
+// Simple: 60 requests per minute
+client = gollmx.NewRateLimitedClient(client, 60)
+
+// Advanced: custom configuration
+client = gollmx.NewRateLimitedClientWithConfig(client, &gollmx.RateLimitConfig{
+    RequestsPerMinute: 100,
+    BurstSize:         10,
+    WaitTimeout:       30 * time.Second,
+})
+
+// Blocks until token available or timeout
+resp, err := client.Chat(ctx, req)
 ```
 
 ## Available Models
